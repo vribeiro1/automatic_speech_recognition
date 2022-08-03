@@ -1,0 +1,8 @@
+funcy
+matplotlib
+mlflow
+numpy
+pandas
+torch
+torchaudio
+tqdm

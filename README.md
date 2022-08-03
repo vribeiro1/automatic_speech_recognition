@@ -1,2 +1,3 @@
-# automatic_speech_recognition
+# Automatic Speech Recognition
+
 Basic ASR with CTCLoss experiments

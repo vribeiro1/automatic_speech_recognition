@@ -1,5 +1,6 @@
 import argparse
 import logging
+import mlflow
 import numpy as np
 import os
 import torch
@@ -38,7 +39,7 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=N
 
     losses = []
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch} - {phase}")
-    for _, melspecs, len_melspecs, transcripts, len_transcripts in progress_bar:
+    for i, (_, melspecs, len_melspecs, transcripts, len_transcripts) in enumerate(progress_bar, start=epoch * int(len(dataloader))):
         melspecs = melspecs.to(device)
         transcripts = transcripts.to(device)
 
@@ -55,13 +56,21 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=N
                     scheduler.step()
 
             losses.append(loss.item())
-            progress_bar.set_postfix(loss=np.mean(losses))
+
+        mean_loss = np.mean(losses)
+        progress_bar.set_postfix(loss=mean_loss)
+
+        if training and i % 10 == 0:
+            mlflow.log_metric("train_loss", mean_loss)
 
     mean_loss = np.mean(losses)
 
     info = {
         "loss": mean_loss
     }
+
+    if not training:
+        mlflow.log_metrics(info)
 
     return info
 
@@ -223,4 +232,7 @@ if __name__ == "__main__":
     with open(args.config_filepath) as f:
         cfg = yaml.safe_load(f)
 
-    main(cfg)
+    with mlflow.start_run():
+        mlflow.log_params(cfg)
+
+        main(cfg)

@@ -1,11 +1,13 @@
+import argparse
 import logging
 import numpy as np
 import os
 import torch
 import torch.nn as nn
+import yaml
 
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -24,7 +26,7 @@ if not os.path.exists(save_to):
     os.makedirs(save_to)
 
 
-def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, device=None):
+def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=None, device=None):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     training = phase == TRAIN
@@ -38,9 +40,7 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, device=None
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch} - {phase}")
     for _, melspecs, len_melspecs, transcripts, len_transcripts in progress_bar:
         melspecs = melspecs.to(device)
-        len_melspecs = len_melspecs.to(device)
         transcripts = transcripts.to(device)
-        len_transcripts = len_transcripts.to(device)
 
         optimizer.zero_grad()
         with torch.set_grad_enabled(training):
@@ -50,6 +50,9 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, device=None
             if training:
                 loss.backward()
                 optimizer.step()
+
+                if scheduler:
+                    scheduler.step()
 
             losses.append(loss.item())
             progress_bar.set_postfix(loss=np.mean(losses))
@@ -63,7 +66,7 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, device=None
     return info
 
 
-def run_test(phase, epoch, model, dataloader, optimizer, criterion, device=None):
+def run_test(phase, epoch, model, dataloader, criterion, device=None):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -73,11 +76,8 @@ def run_test(phase, epoch, model, dataloader, optimizer, criterion, device=None)
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch} - {phase}")
     for _, melspecs, len_melspecs, transcripts, len_transcripts in progress_bar:
         melspecs = melspecs.to(device)
-        len_melspecs = len_melspecs.to(device)
         transcripts = transcripts.to(device)
-        len_transcripts = len_transcripts.to(device)
 
-        optimizer.zero_grad()
         with torch.set_grad_enabled(False):
             outputs = model(melspecs, len_melspecs)
             loss = criterion(outputs, transcripts, len_melspecs, len_transcripts)
@@ -133,7 +133,13 @@ def main(cfg):
 
     in_features = cfg["melspec_params"]["n_mels"]
     n_classes = len(train_dataset.vocabulary)
-    model = AutomaticSpeechRecognition(in_features=in_features, out_features=n_classes)
+    model = AutomaticSpeechRecognition(
+        n_residual_layers=3,
+        n_rnn_layers=5,
+        rnn_hidden_size=512,
+        n_classes=n_classes,
+        n_features=in_features
+    )
     if cfg.get("state_dict_filepath") is not None:
         state_dict = torch.load(cfg.get("state_dict_filepath"), map_location=device)
         model.load_state_dict(state_dict)
@@ -141,7 +147,13 @@ def main(cfg):
 
     loss_fn = nn.CTCLoss()
     optimizer = Adam(model.parameters(), lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"])
-    scheduler = ReduceLROnPlateau(optimizer, factor=0.1, patience=10)
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=cfg["learning_rate"],
+        steps_per_epoch=int(len(train_dataloader)),
+        epochs=cfg["n_epochs"],
+        anneal_strategy="linear"
+    )
 
     epochs = range(1, cfg["n_epochs"] + 1)
     best_metric = torch.inf
@@ -154,6 +166,7 @@ def main(cfg):
             model=model,
             dataloader=train_dataloader,
             optimizer=optimizer,
+            scheduler=scheduler,
             criterion=loss_fn,
             device=device
         )
@@ -164,11 +177,10 @@ def main(cfg):
             model=model,
             dataloader=valid_dataloader,
             optimizer=optimizer,
+            scheduler=scheduler,
             criterion=loss_fn,
             device=device
         )
-
-        scheduler.step(info_valid["loss"])
 
         if info_valid["loss"] <  best_metric:
             best_metric = info_valid["loss"]
@@ -182,7 +194,13 @@ def main(cfg):
         if epochs_since_best > cfg["patience"]:
             break
 
-    best_model = AutomaticSpeechRecognition(in_features=in_features, out_features=n_classes)
+    best_model = AutomaticSpeechRecognition(
+        n_residual_layers=3,
+        n_rnn_layers=5,
+        rnn_hidden_size=512,
+        n_classes=n_classes,
+        n_features=in_features
+    )
     state_dict = torch.load(best_model_filepath, map_location=device)
     best_model.load_state_dict(state_dict)
     best_model.to(device)
@@ -198,25 +216,11 @@ def main(cfg):
 
 
 if __name__ == "__main__":
-    cfg = {
-        "train_dir": "/home/vsouzari/Documents/datasets/LibriSpeech/train-clean-100",
-        "valid_dir": "/home/vsouzari/Documents/datasets/LibriSpeech/dev-clean",
-        "test_dir": "/home/vsouzari/Documents/datasets/LibriSpeech/test-clean",
-        "melspec_params": {
-            "sample_rate": 16000,
-            "n_fft": 1024,
-            "win_length": 1024,
-            "hop_length": 256,
-            "n_mels": 80,
-            "f_min": 0,
-            "f_max": None
-        },
-        "learning_rate": 0.0001,
-        "weight_decay": 0.001,
-        "batch_size": 2,
-        "n_epochs": 1,
-        "patience": 20
-    }
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", dest="config_filepath")
+    args = parser.parse_args()
+
+    with open(args.config_filepath) as f:
+        cfg = yaml.safe_load(f)
 
     main(cfg)
-

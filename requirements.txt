@@ -3,6 +3,7 @@ matplotlib
 mlflow
 numpy
 pandas
+PyYAML
 torch
 torchaudio
 tqdm

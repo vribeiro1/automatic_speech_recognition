@@ -60,17 +60,15 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=N
         mean_loss = np.mean(losses)
         progress_bar.set_postfix(loss=mean_loss)
 
-        if training and i % 10 == 0:
-            mlflow.log_metric("train_loss", mean_loss)
-
     mean_loss = np.mean(losses)
+    mlflow.log_metrics({
+        f"{phase}_loss": mean_loss
+    })
+
 
     info = {
         "loss": mean_loss
     }
-
-    if not training:
-        mlflow.log_metrics(info)
 
     return info
 
@@ -109,7 +107,7 @@ def main(cfg):
     best_model_filepath = os.path.join(save_to, "best_model.pt")
     last_model_filepath = os.path.join(save_to, "last_model.pt")
 
-    train_dataset = LibriSpeechDataset(cfg["train_dir"])
+    train_dataset = LibriSpeechDataset(cfg["train_dir"], **cfg["melspec_params"])
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=cfg["batch_size"],
@@ -119,7 +117,7 @@ def main(cfg):
         worker_init_fn=set_seeds,
     )
 
-    valid_dataset = LibriSpeechDataset(cfg["valid_dir"])
+    valid_dataset = LibriSpeechDataset(cfg["valid_dir"], **cfg["melspec_params"])
     valid_dataloader = DataLoader(
         valid_dataset,
         batch_size=cfg["batch_size"],
@@ -129,7 +127,7 @@ def main(cfg):
         worker_init_fn=set_seeds,
     )
 
-    test_dataset = LibriSpeechDataset(cfg["train_dir"])
+    test_dataset = LibriSpeechDataset(cfg["train_dir"], **cfg["melspec_params"])
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=cfg["batch_size"],

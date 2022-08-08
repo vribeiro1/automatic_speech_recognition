@@ -1,4 +1,3 @@
-import pdb
 import funcy
 import os
 import pandas as pd
@@ -27,9 +26,9 @@ def collate_fn(batch):
 
     transcriptions = [item[2] for item in batch]
     lengths = torch.tensor([transcription.shape[0] for transcription in transcriptions], dtype=torch.int)
-    transcripts_lengths_sorted, transcripts_sort_indices = lengths.sort(descending=True)
+    transcripts_lengths_sorted, _ = lengths.sort(descending=True)
     padded_transcriptions = pad_sequence(transcriptions, batch_first=False)
-    padded_transcriptions = padded_transcriptions[:, transcripts_sort_indices]
+    padded_transcriptions = padded_transcriptions[:, melspecs_sort_indices]
     padded_transcriptions = padded_transcriptions.permute(1, 0)
 
     return (

@@ -1,0 +1,16 @@
+train_dir: /path/to/librispeech/train-clean-100
+valid_dir: /path/to/librispeech/dev-clean
+test_dir: /path/to/librispeech/test-clean
+melspec_params:
+    sample_rate: 16000
+    n_fft: 1024
+    win_length: 1024
+    hop_length: 256
+    n_mels: 128
+    f_min: 0
+    f_max: null
+learning_rate: 0.0005
+weight_decay: 0.
+batch_size: 4
+n_epochs: 300
+patience: 20

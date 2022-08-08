@@ -19,24 +19,24 @@ def collate_fn(batch):
 
     melspecs = [item[1].permute(2, 0, 1) for item in batch]
     lengths = torch.tensor([melspec.shape[0] for melspec in melspecs], dtype=torch.int)
-    melspecs_lenghts_sorted, melspecs_sort_indices = lengths.sort(descending=True)
+    melspecs_lengths_sorted, melspecs_sort_indices = lengths.sort(descending=True)
     padded_melspecs = pad_sequence(melspecs, batch_first=False)
     padded_melspecs = padded_melspecs[:, melspecs_sort_indices, :]  # sequence_length, batch, channels, features
     padded_melspecs = padded_melspecs.permute(1, 2, 3, 0)  # batch, channel, features, sequence_length
 
     transcriptions = [item[2] for item in batch]
     lengths = torch.tensor([transcription.shape[0] for transcription in transcriptions], dtype=torch.int)
-    transcripts_lengths_sorted, _ = lengths.sort(descending=True)
     padded_transcriptions = pad_sequence(transcriptions, batch_first=False)
     padded_transcriptions = padded_transcriptions[:, melspecs_sort_indices]
     padded_transcriptions = padded_transcriptions.permute(1, 0)
+    transcripts_lengths = lengths[melspecs_sort_indices]
 
     return (
         filepaths,
         padded_melspecs,
-        melspecs_lenghts_sorted,
+        melspecs_lengths_sorted,
         padded_transcriptions,
-        transcripts_lengths_sorted
+        transcripts_lengths
     )
 
 

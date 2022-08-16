@@ -3,6 +3,7 @@ import logging
 import mlflow
 import numpy as np
 import os
+import tempfile
 import torch
 import torch.nn as nn
 import yaml
@@ -10,21 +11,25 @@ import yaml
 from torch.optim import Adam
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
+from torchaudio.functional import edit_distance
 from tqdm import tqdm
 
 from dataset import LibriSpeechDataset, collate_fn
+from decoder import GreedyCTCDecoder
 from helpers import set_seeds
 from model import AutomaticSpeechRecognition
+from text_preprocessing import SILENCE
 
 TRAIN = "train"
 VALID = "validation"
 TEST = "test"
 
-# Replace this with MLFlow
-base_dir = os.path.dirname(os.path.abspath(__file__))
-save_to = os.path.join(base_dir, "results")
-if not os.path.exists(save_to):
-    os.makedirs(save_to)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+if not os.path.exists(RESULTS_DIR):
+    os.makedirs(RESULTS_DIR)
+
+TMP_DIR = tempfile.mkdtemp(dir=RESULTS_DIR)
 
 
 def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=None, device=None):
@@ -73,28 +78,73 @@ def run_epoch(phase, epoch, model, dataloader, optimizer, criterion, scheduler=N
     return info
 
 
+def evaluate_results(emissions, targets, len_targets, labels, blank=0, reduction="mean", norm=True):
+    if reduction == "none":
+        fn_reduction = lambda x: x
+    else:
+        fn_reduction = getattr(torch, reduction)
+
+    decoder = GreedyCTCDecoder(labels, blank=blank)
+    decoded_transcripts = decoder(emissions)
+
+    target_transcripts = []
+    for indices, length in zip(targets, len_targets):
+        tokens = [labels[i.item()] for i in indices[:length]]
+        transcript = "".join(tokens)
+        target_transcripts.append(transcript)
+
+    wer = []
+    cer = []
+    for decoded_transcript, target_transcript in zip(decoded_transcripts, target_transcripts):
+        wer_sentence = edit_distance(decoded_transcript.split(), target_transcript.split())
+        cer_sentence = edit_distance(decoded_transcript, target_transcript)
+
+        if norm:
+            wer_sentence = wer_sentence / len(target_transcript.split())
+            cer_sentence = cer_sentence / len(target_transcript)
+
+        wer.append(wer_sentence)
+        cer.append(cer_sentence)
+
+    wer = fn_reduction(torch.tensor(wer, dtype=torch.float))
+    cer = fn_reduction(torch.tensor(cer, dtype=torch.float))
+
+    return wer, cer
+
+
 def run_test(phase, epoch, model, dataloader, criterion, device=None):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
 
+    wer = []
+    cer = []
     losses = []
+    labels = dataloader.dataset.vocabulary_transposed
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch} - {phase}")
     for _, melspecs, len_melspecs, transcripts, len_transcripts in progress_bar:
         melspecs = melspecs.to(device)
         transcripts = transcripts.to(device)
 
         with torch.set_grad_enabled(False):
-            outputs = model(melspecs, len_melspecs)
-            loss = criterion(outputs, transcripts, len_melspecs, len_transcripts)
+            emissions = model(melspecs, len_melspecs)
+            loss = criterion(emissions, transcripts, len_melspecs, len_transcripts)
             losses.append(loss.item())
             progress_bar.set_postfix(loss=np.mean(losses))
 
+        batch_wer, batch_cer = evaluate_results(emissions, transcripts, len_transcripts, labels)
+        wer.append(batch_wer)
+        cer.append(batch_cer)
+
     mean_loss = np.mean(losses)
+    mean_wer = np.mean(wer)
+    mean_cer = np.mean(cer)
 
     info = {
-        "loss": mean_loss
+        "loss": mean_loss,
+        "wer": mean_wer,
+        "cer": mean_cer
     }
 
     return info
@@ -104,8 +154,8 @@ def main(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Running on '{device.type}'")
 
-    best_model_filepath = os.path.join(save_to, "best_model.pt")
-    last_model_filepath = os.path.join(save_to, "last_model.pt")
+    best_model_filepath = os.path.join(TMP_DIR, "best_model.pt")
+    last_model_filepath = os.path.join(TMP_DIR, "last_model.pt")
 
     train_dataset = LibriSpeechDataset(cfg["train_dir"], **cfg["melspec_params"])
     train_dataloader = DataLoader(
@@ -192,11 +242,13 @@ def main(cfg):
         if info_valid["loss"] <  best_metric:
             best_metric = info_valid["loss"]
             torch.save(model.state_dict(), best_model_filepath)
+            mlflow.log_artifact(best_model_filepath)
             epochs_since_best = 0
         else:
             epochs_since_best += 1
 
         torch.save(model.state_dict(), last_model_filepath)
+        mlflow.log_artifact(last_model_filepath)
 
         if epochs_since_best > cfg["patience"]:
             break

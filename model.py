@@ -15,7 +15,9 @@ class CNNLayerNorm(nn.Module):
         """
         x: torch.tensor of shape (batch_size, channels, features, sequence_len)
         """
-        out = x.transpose(2, 3)  #
+        x = x.transpose(2, 3).contiguous()
+        x = self.layer_norm(x)
+        return x.transpose(2, 3).contiguous()
 
 
 class ResidualCNN(nn.Module):
@@ -28,8 +30,8 @@ class ResidualCNN(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
-        self.layer_norm1 = nn.LayerNorm(n_features)
-        self.layer_norm2 = nn.LayerNorm(n_features)
+        self.layer_norm1 = nn.CNNLayerNorm(n_features)
+        self.layer_norm2 = nn.CNNLayerNorm(n_features)
 
     def forward(self, x):
         """

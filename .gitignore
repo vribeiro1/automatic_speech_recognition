@@ -1,6 +1,8 @@
 .dev_env
 .vscode
 
+*.stderr
+*.stdout
 *.pyc
 *.ipynb
 *.csv

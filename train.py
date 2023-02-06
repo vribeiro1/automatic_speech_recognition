@@ -5,6 +5,7 @@ import logging
 import mlflow
 import numpy as np
 import os
+import tempfile
 import torch
 import torch.nn as nn
 import yaml
@@ -17,6 +18,7 @@ from torchmetrics.functional import word_error_rate
 from tqdm import tqdm
 
 from dataset import LibriSpeechDataset, collate_fn
+from decoder import GreedyCTCDecoder
 from helpers import set_seeds
 from model import DeepSpeech2
 from text_preprocessing import BLANK, SILENCE, UNKNOWN
@@ -25,11 +27,12 @@ TRAIN = "train"
 VALID = "validation"
 TEST = "test"
 
-# Replace this with MLFlow
-base_dir = os.path.dirname(os.path.abspath(__file__))
-save_to = os.path.join(base_dir, "results")
-if not os.path.exists(save_to):
-    os.makedirs(save_to)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+if not os.path.exists(RESULTS_DIR):
+    os.makedirs(RESULTS_DIR)
+
+TMP_DIR = tempfile.mkdtemp(dir=RESULTS_DIR)
 
 
 def run_epoch(
@@ -120,6 +123,8 @@ def run_test(phase, epoch, model, dataloader, criterion, fn_metrics, device=None
 
     model.eval()
 
+    wer = []
+    cer = []
     losses = []
     metrics_values = {
         metric_name: [] for metric_name, fn_metric in fn_metrics.items()
@@ -154,7 +159,9 @@ def run_test(phase, epoch, model, dataloader, criterion, fn_metrics, device=None
 
     mean_loss = np.mean(losses)
     info = {
-        "loss": mean_loss
+        "loss": mean_loss,
+        "wer": mean_wer,
+        "cer": mean_cer
     }
     info.update({
         metric_name: np.mean(metric_val)

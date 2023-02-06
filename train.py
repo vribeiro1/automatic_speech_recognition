@@ -198,7 +198,21 @@ class EditDistance:
         return edit_dist
 
 
-def main(cfg):
+def main(
+    train_dir,
+    valid_dir,
+    test_dir,
+    num_epochs,
+    patience,
+    batch_size,
+    learning_rate,
+    weight_decay,
+    melspec_params,
+    model_params,
+    logits_large_margins=0,
+    state_dict_filepath=None,
+    checkpoint_filepath=None,
+):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Running on '{device.type}'")
 
@@ -207,12 +221,12 @@ def main(cfg):
     save_checkpoint_filepath = os.path.join(save_to, "checkpoint.pt")
 
     train_dataset = LibriSpeechDataset(
-        cfg["train_dir"],
-        **cfg["melspec_params"]
+        train_dir,
+        **melspec_params,
     )
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=cfg["batch_size"],
+        batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         collate_fn=collate_fn,
@@ -220,12 +234,12 @@ def main(cfg):
     )
 
     valid_dataset = LibriSpeechDataset(
-        cfg["valid_dir"],
-        **cfg["melspec_params"]
+        valid_dir,
+        **melspec_params,
     )
     valid_dataloader = DataLoader(
         valid_dataset,
-        batch_size=cfg["batch_size"],
+        batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         collate_fn=collate_fn,
@@ -233,42 +247,42 @@ def main(cfg):
     )
 
     test_dataset = LibriSpeechDataset(
-        cfg["train_dir"],
-        **cfg["melspec_params"]
+        train_dir,
+        **melspec_params,
     )
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=cfg["batch_size"],
+        batch_size=batch_size,
         shuffle=False,
         num_workers=0,
         collate_fn=collate_fn,
         worker_init_fn=set_seeds,
     )
 
-    in_features = cfg["melspec_params"]["n_mels"]
+    in_features = melspec_params["n_mels"]
     num_classes = len(train_dataset.vocabulary)
     model = DeepSpeech2(
         num_classes=num_classes,
-        **cfg["model_params"]
+        **model_params,
     )
-    if cfg.get("state_dict_filepath") is not None:
-        state_dict = torch.load(cfg.get("state_dict_filepath"), map_location=device)
+    if state_dict_filepath is not None:
+        state_dict = torch.load(state_dict_filepath, map_location=device)
         model.load_state_dict(state_dict)
     model.to(device)
 
     loss_fn = nn.CTCLoss(
         blank=0,
-        zero_infinity=True
+        zero_infinity=True,
     )
     optimizer = Adam(
         model.parameters(),
-        lr=cfg["learning_rate"],
-        weight_decay=cfg["weight_decay"]
+        lr=learning_rate,
+        weight_decay=weight_decay,
     )
     scheduler = CyclicLR(
         optimizer,
-        base_lr=cfg["learning_rate"] / 25,
-        max_lr=cfg["learning_rate"],
+        base_lr=learning_rate / 25,
+        max_lr=learning_rate,
         cycle_momentum=False
     )
 
@@ -283,18 +297,18 @@ def main(cfg):
         "edit_distance": EditDistance(decoder)
     }
 
-    logits_large_margins = cfg["logits_large_margins"]
-    epochs = range(1, cfg["n_epochs"] + 1)
+    logits_large_margins = logits_large_margins
+    epochs = range(1, num_epochs + 1)
     best_metric = torch.inf
     epochs_since_best = 0
 
-    if cfg.get("checkpoint_filepath") is not None:
-        checkpoint = torch.load(cfg["checkpoint_filepath"])
+    if checkpoint_filepath is not None:
+        checkpoint = torch.load(checkpoint_filepath)
 
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         # scheduler.load_state_dict(checkpoint["scheduler"])
-        epochs = range(checkpoint["epoch"], cfg["num_epochs"] + 1)
+        epochs = range(checkpoint["epoch"], num_epochs + 1)
         best_metric = checkpoint["best_metric"]
         epochs_since_best = checkpoint["epochs_since_best"]
 
@@ -346,12 +360,12 @@ def main(cfg):
         torch.save(checkpoint, save_checkpoint_filepath)
         mlflow.log_artifact(save_checkpoint_filepath)
 
-        if epochs_since_best > cfg["patience"]:
+        if epochs_since_best > patience:
             break
 
     best_model = DeepSpeech2(
         num_classes=num_classes,
-        **cfg["model_params"]
+        **model_params,
     )
     state_dict = torch.load(best_model_filepath, map_location=device)
     best_model.load_state_dict(state_dict)
@@ -372,12 +386,18 @@ def main(cfg):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config_filepath")
+    parser.add_argument("--experiment", dest="experiment_name", default="automatic_speech_recognition")
+    parser.add_argument("--run", dest="run_name", default=None)
     args = parser.parse_args()
 
     with open(args.config_filepath) as f:
         cfg = yaml.safe_load(f)
 
-    with mlflow.start_run():
+    experiment = mlflow.set_experiment(args.experiment_name)
+    with mlflow.start_run(
+        experiment_id=experiment.experiment_id,
+        run_name=args.run_name
+    ):
         mlflow.log_params(cfg)
-
-        main(cfg)
+        mlflow.log_dict(cfg, "config.json")
+        main(**cfg)

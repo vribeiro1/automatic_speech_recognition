@@ -31,7 +31,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 if not os.path.exists(RESULTS_DIR):
     os.makedirs(RESULTS_DIR)
-
 TMP_DIR = tempfile.mkdtemp(dir=RESULTS_DIR)
 
 
@@ -216,9 +215,9 @@ def main(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Running on '{device.type}'")
 
-    best_model_filepath = os.path.join(save_to, "best_model.pt")
-    last_model_filepath = os.path.join(save_to, "last_model.pt")
-    save_checkpoint_filepath = os.path.join(save_to, "checkpoint.pt")
+    best_model_filepath = os.path.join(TMP_DIR, "best_model.pt")
+    last_model_filepath = os.path.join(TMP_DIR, "last_model.pt")
+    save_checkpoint_filepath = os.path.join(TMP_DIR, "checkpoint.pt")
 
     train_dataset = LibriSpeechDataset(
         train_dir,

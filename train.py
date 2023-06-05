@@ -15,10 +15,13 @@ from torch.optim.lr_scheduler import CyclicLR
 from torch.utils.data import DataLoader
 from torchaudio.models.decoder import ctc_decoder
 from torchmetrics.functional import word_error_rate
+from torchaudio.transforms import (
+    FrequencyMasking,
+    TimeMasking,
+)
 from tqdm import tqdm
 
 from dataset import LibriSpeechDataset, collate_fn
-from decoder import GreedyCTCDecoder
 from helpers import set_seeds
 from model import DeepSpeech2
 from text_preprocessing import BLANK, SILENCE, UNKNOWN
@@ -122,8 +125,6 @@ def run_test(phase, epoch, model, dataloader, criterion, fn_metrics, device=None
 
     model.eval()
 
-    wer = []
-    cer = []
     losses = []
     metrics_values = {
         metric_name: [] for metric_name, fn_metric in fn_metrics.items()
@@ -159,8 +160,6 @@ def run_test(phase, epoch, model, dataloader, criterion, fn_metrics, device=None
     mean_loss = np.mean(losses)
     info = {
         "loss": mean_loss,
-        "wer": mean_wer,
-        "cer": mean_cer
     }
     info.update({
         metric_name: np.mean(metric_val)
@@ -208,6 +207,7 @@ def main(
     weight_decay,
     melspec_params,
     model_params,
+    num_workers=0,
     logits_large_margins=0,
     state_dict_filepath=None,
     checkpoint_filepath=None,
@@ -219,46 +219,59 @@ def main(
     last_model_filepath = os.path.join(TMP_DIR, "last_model.pt")
     save_checkpoint_filepath = os.path.join(TMP_DIR, "checkpoint.pt")
 
+    augmentations = [
+        FrequencyMasking(
+            freq_mask_param=10,
+            iid_masks=True,
+        ),
+        TimeMasking(
+            time_mask_param=10,
+            iid_masks=True,
+            p=0.1
+        ),
+    ]
+
     train_dataset = LibriSpeechDataset(
         train_dir,
+        augmentations=augmentations,
         **melspec_params,
     )
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         worker_init_fn=set_seeds,
     )
 
     valid_dataset = LibriSpeechDataset(
         valid_dir,
+        augmentations=augmentations,
         **melspec_params,
     )
     valid_dataloader = DataLoader(
         valid_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         worker_init_fn=set_seeds,
     )
 
     test_dataset = LibriSpeechDataset(
-        train_dir,
+        test_dir,
         **melspec_params,
     )
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         worker_init_fn=set_seeds,
     )
 
-    in_features = melspec_params["n_mels"]
     num_classes = len(train_dataset.vocabulary)
     model = DeepSpeech2(
         num_classes=num_classes,

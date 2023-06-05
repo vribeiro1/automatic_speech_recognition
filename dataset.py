@@ -58,6 +58,7 @@ class LibriSpeechDataset(Dataset):
         n_mels=80,
         f_min=0,
         f_max=None,
+        augmentations=None,
     ):
         super().__init__()
 
@@ -93,6 +94,8 @@ class LibriSpeechDataset(Dataset):
             f_max=f_max
         )
 
+        self.augmentations = augmentations if augmentations is not None else []
+
     @staticmethod
     def make_vocabulary(transcriptions, blank, silence, unknown):
         all_tokens = set(funcy.flatten(map(list, transcriptions)))
@@ -123,6 +126,9 @@ class LibriSpeechDataset(Dataset):
         audio = F.resample(audio, orig_freq=sample_rate, new_freq=self.sample_rate)
         audio = torch.concat([audio, audio], dim=0)
         melspec = dynamic_range_compression(self.melspectrogram(audio))
+
+        for augmentation in self.augmentations:
+            melspec = augmentation(melspec)
 
         tokens = torch.tensor(text_processor(transcription, self.vocabulary), dtype=torch.int)
         return_filepath = filepath.replace(self.datadir, "").strip("/")

@@ -9,16 +9,13 @@ import tempfile
 import torch
 import torch.nn as nn
 import yaml
+import shutil
 
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CyclicLR
 from torch.utils.data import DataLoader
 from torchaudio.models.decoder import ctc_decoder
 from torchmetrics.functional import word_error_rate
-from torchaudio.transforms import (
-    FrequencyMasking,
-    TimeMasking,
-)
 from tqdm import tqdm
 
 from dataset import LibriSpeechDataset, collate_fn
@@ -31,10 +28,11 @@ VALID = "validation"
 TEST = "test"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
+TMPFILES = os.path.join(BASE_DIR, "tmp")
+TMP_DIR = tempfile.mkdtemp(dir=TMPFILES)
+RESULTS_DIR = os.path.join(TMP_DIR, "results")
 if not os.path.exists(RESULTS_DIR):
     os.makedirs(RESULTS_DIR)
-TMP_DIR = tempfile.mkdtemp(dir=RESULTS_DIR)
 
 
 def run_epoch(
@@ -219,21 +217,8 @@ def main(
     last_model_filepath = os.path.join(TMP_DIR, "last_model.pt")
     save_checkpoint_filepath = os.path.join(TMP_DIR, "checkpoint.pt")
 
-    augmentations = [
-        FrequencyMasking(
-            freq_mask_param=10,
-            iid_masks=True,
-        ),
-        TimeMasking(
-            time_mask_param=10,
-            iid_masks=True,
-            p=0.1
-        ),
-    ]
-
     train_dataset = LibriSpeechDataset(
         train_dir,
-        augmentations=augmentations,
         **melspec_params,
     )
     train_dataloader = DataLoader(
@@ -247,7 +232,6 @@ def main(
 
     valid_dataset = LibriSpeechDataset(
         valid_dir,
-        augmentations=augmentations,
         **melspec_params,
     )
     valid_dataloader = DataLoader(
@@ -324,6 +308,11 @@ def main(
         best_metric = checkpoint["best_metric"]
         epochs_since_best = checkpoint["epochs_since_best"]
 
+        print(f"""
+Loaded checkpoint -- Launching training from epoch {epoch} with best metric
+so far {best_metric} seen {epochs_since_best} epochs ago.
+""")
+
     for epoch in epochs:
         info_train = run_epoch(
             phase=TRAIN,
@@ -372,6 +361,11 @@ def main(
         torch.save(checkpoint, save_checkpoint_filepath)
         mlflow.log_artifact(save_checkpoint_filepath)
 
+        print(f"""
+Finished training epoch {epoch}
+Best metric: {'%0.4f' % best_metric}, Epochs since best: {epochs_since_best}
+""")
+
         if epochs_since_best > patience:
             break
 
@@ -398,18 +392,35 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config_filepath")
-    parser.add_argument("--experiment", dest="experiment_name", default="automatic_speech_recognition")
-    parser.add_argument("--run", dest="run_name", default=None)
+    parser.add_argument("--mlflow", dest="mlflow_tracking_uri", default=None)
+    parser.add_argument("--experiment", dest="experiment_name", default="phoneme_recognition")
+    parser.add_argument("--run_id", dest="run_id", default=None)
+    parser.add_argument("--run_name", dest="run_name", default=None)
+    parser.add_argument("--checkpoint", dest="checkpoint_filepath", default=None)
     args = parser.parse_args()
+
+    if args.mlflow_tracking_uri is not None:
+        mlflow.set_tracking_uri(args.mlflow_tracking_uri)
 
     with open(args.config_filepath) as f:
         cfg = yaml.safe_load(f)
 
     experiment = mlflow.set_experiment(args.experiment_name)
     with mlflow.start_run(
+        run_id=args.run_id,
         experiment_id=experiment.experiment_id,
         run_name=args.run_name
-    ):
-        mlflow.log_params(cfg)
-        mlflow.log_dict(cfg, "config.json")
-        main(**cfg)
+    ) as run:
+        print(f"Experiment ID: {experiment.experiment_id}\nRun ID: {run.info.run_id}")
+        try:
+            mlflow.log_params(cfg)
+            mlflow.log_artifact(args.config_filepath)
+        except shutil.SameFileError:
+            logging.info("Skipping logging config file since it already exists.")
+        try:
+            main(
+                **cfg,
+                checkpoint_filepath=args.checkpoint_filepath,
+            )
+        finally:
+            shutil.rmtree(TMP_DIR)
